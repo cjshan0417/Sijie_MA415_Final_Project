@@ -1,0 +1,173 @@
+---
+title: "MA415 Final Proejct Report/Technical Specification"
+author: "CJ/Sijie Shan"
+date: "December 14, 2017"
+output: 
+  pdf_document:
+    fig_caption: true
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = FALSE)       # No code
+knitr::opts_chunk$set(message = FALSE)    # No messages
+knitr::opts_chunk$set(warning = FALSE)    # No warnings
+options(digits = 3)                       # 2 decimals
+
+# prepare packages
+if(!require("pacman")) install.packages("pacman")
+pacman::p_load("dplyr", "ggplot2", "kableExtra", "knitr", "pander", "gridExtra",
+               "tibble","tidyr", "readr", "twitteR", "reshape", "ROAuth", "tm", 
+               "wordcloud", "shiny", "tidyverse", "tidytext", "lubridate", "syuzhet",
+               "scales", "sp", "RgoogleMaps", "ggmap", "maptools", "datasets", "tigris")
+
+# set up connection
+api_key             <- "gXqBTqK0l8m27VzecET7DhBAK"
+api_secret          <- "yIu5bA1dJlKiIIEk6VpEVUeXJGBzrpNg2HzA1h78lmjumneMRX"
+access_token        <- "927637296295415809-6jHILffeAgkE4UrnRhQRMzXIHOX1MO1"
+access_token_secret <- "ZaoYIuFITfZiUlio5UgOHQqJgPeMEZedgzex3vfMsaAcX"
+setup_twitter_oauth(api_key, api_secret, access_token, access_token_secret)
+
+user_id <- "@Katyperry"
+tweets_raw <- userTimeline(user_id, n = 3200)
+
+# remove retweets
+tweets_df <- twListToDF(strip_retweets(tweets_raw, strip_manual = TRUE, strip_mt = TRUE))
+
+# normalize data
+tweets_df$text <- iconv(tweets_df$text, 'latin1', 'ASCII', 'byte')
+
+# build a corpus, and specify the source to be character vectors
+myCorpus <- Corpus(VectorSource(tweets_df$text))
+
+# remove extra whitespace
+myCorpus <- tm_map(myCorpus, stripWhitespace)
+
+# convert to lower case
+myCorpus <- tm_map(myCorpus, content_transformer(tolower))
+
+# remove tabs
+rm_tab <- function(x) gsub("[ |\t]{2,}", "", x)
+myCorpus <- tm_map(myCorpus, content_transformer(rm_tab))
+
+# remove emoji
+rm_emoj <- function(x) gsub("<.*?>", "", x)
+myCorpus <- tm_map(myCorpus, content_transformer(rm_emoj))
+
+# remove stopwords
+data(stop_words)
+extra_words <- c("amp", 1:9, "[a-z]")
+myStopwords <- c(unique(unlist(stop_words$word)), extra_words)
+myCorpus    <- tm_map(myCorpus, removeWords, myStopwords)
+
+# remove urls
+rm_url   <- function(x) gsub("http[^[:space:]]*", "", x)
+myCorpus <- tm_map(myCorpus, content_transformer(rm_url))
+
+# replace @username
+rm_username <- function(x) gsub("@\\w+", "", x)
+myCorpus    <- tm_map(myCorpus, content_transformer(rm_username))
+
+# remove punctuation
+rm_punc  <- function(x) gsub("[[:punct:]]", "", x)
+myCorpus <- tm_map(myCorpus, content_transformer(rm_punc))
+
+# build term document matrix
+tdm <- TermDocumentMatrix(myCorpus, control = list(wordLengths = c(1, Inf)))
+term_freq <- rowSums(as.matrix(tdm))
+term_freq <- subset(term_freq, term_freq >= 5)
+df <- data.frame(term = names(term_freq), freq = term_freq)
+m  <- as.matrix(tdm)
+
+# calculate the frequency of words and sort it by frequency
+word_freq <- sort(rowSums(m), decreasing = T)
+
+# Store frequent words in a table
+top_words <- head(as.data.frame(word_freq), 10)
+top_words <- tibble::rownames_to_column(top_words, "Word")
+colnames(top_words)[2] <- "Frequency"
+```
+
+## 1. Project Overview
+
+  The current project contains an interactive Shiny application, which allows users to plot a word cloud of most used words of *any* given Twitter account. The only input required from users is the user name of the account to be visualized, for example, @BU_Tweets, @BarackObama, or @YouTube. The idea behind the project is that I hope users to have more control of what is being presented to them, and Shiny, featured by its interactive interface, serves as an appropriate tool to achieve that purpose.
+  
+## 2. Example Word Cloud of Katy Perry's TWitter Account
+
+```{r word cloud, out.width = '50%', align = "center", fig.align = "center"}
+# draw word cloud with specified number of minimum frequency
+wordcloud(words = names(word_freq),
+          freq  = word_freq,
+          scale = c(4.5, 1),
+          max.words = 50,
+          min.freq = 3,
+          colors = brewer.pal(8, "Dark2"),
+          random.color = TRUE,
+          random.order = F)
+
+# table for most frequent words
+kable(top_words,
+      caption = 'Frequency of Most Commmon Words',
+      format = "latex", booktabs = T) %>%
+  kable_styling(font_size = 7, latex_options = c("hold_position", "condensed", "striped"))
+```
+
+## 3. How to Use the Shiny App
+
+  The word cloud visualization Shiny application can be accessed at *[https://cjshan0417.shinyapps.io/Word_Cloud/](https://cjshan0417.shinyapps.io/Word_Cloud/)*. After entering the Shiny application, please allow a few seconds for the app to finish loading. While loading, the app will show a "loading" message, and a default word cloud will appear as the app finishes loading.
+  
+  Users can also control the minimum frequency of words appearing in the word cloud by changing value of the slider in the top left corner. For example, a minimum frequency of 5 means that only words that appear 5 or more times in Tweets will be included in the word cloud.
+  
+  To change the Twitter account being visualized, enter a new Twitter user name to the input box under "Enter a Twitter User Name," upon finish entering, click on the "Refresh" button below the box.
+  
+  Please note that a Twitter user name is different from a Twitter account name. A Twitter user name, which always starts with "@," is a unique name that is linked to a Twitter account. It cannot be changed by user. A Twitter account name, on the other hand, is not unique, and can be changed anytime. To draw a word cloud of a Twitter user, his or her Twitter **user** name - the name that begins with "@" - is required.
+
+### 3.1. Exmaple of Visualizing a Twitter Account
+
+  To draw a word cloud of Tweets of Donald Trump, the current president of the United States, simply enter "@RealDonaldTrump" to the user name box, and click "Refresh." The new word cloud will appear in seconds. The "@" symbol need not to be included per users' preference.
+
+## 4. More Visualization of @katyperry
+
+  To my surprise, most tweets are not geocoded - On Dec. 12^th^, 2017, I collected 279 tweets, but only 25 of them were geocoded. Out of these 25 tweets, there were 12 unique locations. Some locations are so close that they cannot be distinguished when plotted on a map. Below is a map of location of Katy Perry's tweets. It looks that she has been traveling quite frequently.
+```{r location analysis, out.width = '50%', fig.align = 'center'}
+# location analysis
+tweets_loc <- tweets_df[, 15:16]  # extract longtitude and latitude
+tweets_loc <- tweets_loc[complete.cases(tweets_loc), ]  # save complete location
+tweets_loc <- unique(tweets_loc)
+tweets_loc[, c(1:2)] <- sapply(tweets_loc[, c(1:2)], as.numeric)  # convert to numeric
+
+# plot twitter location
+qmplot(longitude, latitude, data = tweets_loc,
+       maptype = "watercolor", colour = I('red'), size = I(3))
+```
+  Below is a summary of Katy Perry's Twitter use by day.
+```{r, out.width = "45%", fig.align = "center"}
+# day analysis
+ggplot(data = tweets_df, aes(x = wday(created, label = TRUE))) +
+  geom_bar(aes(fill = ..count..)) +
+  theme(legend.position = "none") +
+  xlab("Day of the Week") + ylab("Number of tweets") + 
+  labs(title = "Days of which Katy Perry Posted Tweets") +
+  scale_y_continuous(expand = c(0, 0)) +  # axis starts at 0
+  theme(panel.grid = element_blank(), panel.border = element_blank())
+```
+
+## 5. Project Technical Specification
+
+  This section provides a brief overview of process of data manipulation in the Shiny app, and discusses some bugs in the application.
+
+### 5.1. Data Manipulation in the Shiny App
+
+  The current Shiny apps adopts the following R packages: *twitteR*, *reshape*, *ROAuth*, *tm*, *wordcloud*, *shiny*, *tidyverse*, *tidytext*. Upon launching, the app fetches default data from Katy Perry's Twitter account, and normalizes text field of the Tweets. Examples of data cleaning include removing punctuation, stop words, single numbers, and single characters. Then the app converts the normalized data into a term document matrix, and uses the matrix to pick out most frequent words, and visualize those words using the *wordcloud()* function in the *wordcloud* package.
+  
+  When user enters a new twitter user name, the app fetches new data from the updated Twitter account, and relaunches the above process.
+
+### 5.2. Bugs and Potential Remedies
+
+  When testing the Shiny app, I noticed a few potential bugs to be fixed: when user enters a non-existing Twitter account, the app will return an error message. To avoid such prompt, some kind of output verification is needed; also, when the minimum frequency of words (which is control by the slider) exceeds the maximum frequency of words in the data, all words in the data will be plotted in the word cloud. This problem may require use of the *observeEvent()* Shiny function.
+  
+## 6. Summary
+
+  This Shiny app, though small, shows that I have learnt several essential abilities in data science: first, it demonstrates my ability to collect, clean, and normalize data as needed, which, in fact, is a dispensable skill to have when working with any type of data; second, it shows my ability to visualize data, and, more importantly, to allow users to participate in the process of visualization; last, it trains my ability to communicate what I have achieved to users, i.e., writing technical specification/business requirement document.
+  
+  Throughout the semester, I have learnt a lot from the class - from producing PDF file using R Markdown, to collect, clean and visualize data using R Studio. I feel that my first foray into data science was quite successful, and I truly felt a sense of achievement when I finished the current project - it is already a handy app! I want to say thank you for teaching this interesting class, and for the knowledge you have taught us. Merry Christmas and Happy New Year!
+  

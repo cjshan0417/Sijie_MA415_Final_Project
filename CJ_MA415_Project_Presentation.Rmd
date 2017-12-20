@@ -1,0 +1,139 @@
+---
+title: "Visualizing Twitter Data - Project Presentation"
+author: "CJ/Sijie Shan"
+date: "December 17, 2017"
+output: html_document
+---
+
+```{r set up environment, include = FALSE}
+knitr::opts_chunk$set(echo = FALSE)       # No code
+knitr::opts_chunk$set(message = FALSE)    # No messages
+knitr::opts_chunk$set(warning = FALSE)    # No warnings
+options(digits = 3)                       # 2 decimals
+
+# Prepare packages
+if (!require("pacman")) install.packages("pacman")
+pacman::p_load("dplyr", "ggplot2", "kableExtra", "knitr", "pander", "gridExtra",
+               "tibble","tidyr", "readr", "twitteR", "reshape", "ROAuth", "tm", 
+               "wordcloud", "shiny", "tidyverse", "tidytext", "lubridate", "syuzhet",
+               "scales", "sp", "RgoogleMaps", "ggmap", "maptools", "datasets", "tigris")
+```
+
+```{r connect to twitter and downoad, include = FALSE}
+# set up connection
+api_key             <- "gXqBTqK0l8m27VzecET7DhBAK"
+api_secret          <- "yIu5bA1dJlKiIIEk6VpEVUeXJGBzrpNg2HzA1h78lmjumneMRX"
+access_token        <- "927637296295415809-6jHILffeAgkE4UrnRhQRMzXIHOX1MO1"
+access_token_secret <- "ZaoYIuFITfZiUlio5UgOHQqJgPeMEZedgzex3vfMsaAcX"
+setup_twitter_oauth(api_key, api_secret, access_token, access_token_secret)
+
+# download data
+user_id <- "@BU_Tweets"
+tweets_raw <- userTimeline(user_id, n = 3200)
+
+# remove retweets
+tweets_df <- twListToDF(strip_retweets(tweets_raw, strip_manual = TRUE, strip_mt = TRUE))
+
+# normalize data
+tweets_df$text <- iconv(tweets_df$text, 'latin1', 'ASCII', 'byte')
+tweets_df$created <- as.POSIXlt(tweets_df$created)
+
+# build a corpus, and specify the source to be character vectors
+myCorpus <- Corpus(VectorSource(tweets_df$text))
+
+# remove extra whitespace
+myCorpus <- tm_map(myCorpus, stripWhitespace)
+
+# convert to lower case
+myCorpus <- tm_map(myCorpus, content_transformer(tolower))
+
+# remove tabs
+rm_tab <- function(x) gsub("[ |\t]{2,}", "", x)
+myCorpus <- tm_map(myCorpus, content_transformer(rm_tab))
+
+# remove emoji
+rm_emoj <- function(x) gsub("<.*?>", "", x)
+myCorpus <- tm_map(myCorpus, content_transformer(rm_emoj))
+
+# remove stopwords
+data(stop_words)
+extra_words <- c("amp", 1:9, "[a-z]")
+myStopwords <- c(unique(unlist(stop_words$word)), extra_words)
+myCorpus    <- tm_map(myCorpus, removeWords, myStopwords)
+
+# remove urls
+rm_url   <- function(x) gsub("http[^[:space:]]*", "", x)
+myCorpus <- tm_map(myCorpus, content_transformer(rm_url))
+
+# replace @username
+rm_username <- function(x) gsub("@\\w+", "", x)
+myCorpus    <- tm_map(myCorpus, content_transformer(rm_username))
+
+# remove punctuation
+rm_punc  <- function(x) gsub("[[:punct:]]", "", x)
+myCorpus <- tm_map(myCorpus, content_transformer(rm_punc))
+
+# build term document matrix
+tdm <- TermDocumentMatrix(myCorpus, control = list(wordLengths = c(1, Inf)))
+term_freq <- rowSums(as.matrix(tdm))
+term_freq <- subset(term_freq, term_freq >= 5)
+
+# calculate  frequency of words and sort it by frequency
+m  <- as.matrix(tdm)
+word_freq <- sort(rowSums(m), decreasing = T)
+
+# Store frequent words in a table
+top_words <- head(as.data.frame(word_freq), 10)
+top_words <- tibble::rownames_to_column(top_words, "Word")
+colnames(top_words)[2] <- "Frequency"
+```
+
+## Project Goal
+
+Twitter, created in March 2006, rapidly gained worldwide popularity. In 2012, more than 100 million users posted 340 million tweets a day[^1]. In the third quarter of 2017, the number of monthly active Twitter users has surged to 330 millions. Along with the growing popularity of Twitter comes an abundance of available data. The current project will make use of available data on Twitter and visualizes most-used words of any Twitter account in a word cloud.
+
+[^1]: Twitter (March 21, 2012). "Twitter turns six". Twitter
+
+## Word Use of @BU_Tweets
+```{r word cloud, out.width = '50%', fig.align = 'center'}
+# draw word cloud with specified number of minimum frequency
+wordcloud(words = names(word_freq), 
+          freq  = word_freq,
+          scale = c(4.5, 1),
+          max.words = 50,
+          min.freq = 3,
+          colors = brewer.pal(8, "Dark2"),
+          random.color = TRUE,
+          random.order = F)
+
+# table for most frequent words
+kable(top_words,
+      caption = 'Frequency of Most Commmon Words',
+      format = "latex", booktabs = T) %>%
+  kable_styling(font_size = 7, latex_options = c("hold_position", "condensed", "striped"))
+```
+
+Above is an example word cloud of most-used words on Boston university Twitter account - the more often a word is being used, the larger the word appears. Not surprisingly, we saw repeated use of words like "bu" and "terriers."  
+
+```{r day analysis, out.width = '50%', fig.align = 'center'}
+# day analysis
+ggplot(data = tweets_df, aes(x = wday(created, label = TRUE))) +
+  geom_bar(aes(fill = ..count..)) +
+  theme(legend.position = "none") +
+  xlab("Day of the Week") + ylab("Number of tweets") + 
+  labs(title = "Days of which @BU_Tweets Posted Tweets")
+```
+
+We can also see from the above plot that @BU_Tweets mostly posts on weekdays - looks natural as a school Twitter account.
+
+```{r bu location, echo = TRUE}
+geocode("Boston University") # location of BU
+```
+
+Unfortunately, all of tweets posted by BU are not geocoded - as a matter of fact, a random sample of 1.5 million public tweets by 10,000 users over 18 months reports that 95% of users never geotag a single tweet.[^2] But still, we can draw a map of peripheral of BU.
+
+[^2]: https://www.quora.com/What-percentage-of-tweets-are-geotagged-What-percentage-of-geotagged-tweets-are-ascribed-to-a-venue
+
+```{r bu map, out.width = '50%', fig.align = 'center'}
+qmap("Boston university", zoom = 15)
+```
